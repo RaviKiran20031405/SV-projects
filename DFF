@@ -1,0 +1,242 @@
+Dff:
+/////////////////////////module/////////////////////////////////////
+1.	module dff (dff_if vif);
+2.	 
+3.	  // Always block triggered on the positive edge of the clock signal
+4.	  always @(posedge vif.clk)
+5.	    begin
+6.	      // Check if the reset signal is asserted
+7.	      if (vif.rst == 1'b1)
+8.	        // If reset is active, set the output to 0
+9.	        vif.dout <= 1'b0;
+10.	      else
+11.	        // If reset is not active, pass the input value to the output
+12.	        vif.dout <= vif.din;
+13.	    end
+14.	  
+15.	endmodule
+16.	 
+17.	// Define an interface "dff_if" with the following signals
+18.	interface dff_if;
+19.	  logic clk;   // Clock signal
+20.	  logic rst;   // Reset signal
+21.	  logic din;   // Data input
+22.	  logic dout;  // Data output
+23.	  
+24.	endinterface
+
+
+/////////////////////complete verification ENV TB//////////////////////////////////////////////////////
+1.	class transaction;
+2.	  rand bit din;    // Define a random input bit "din"
+3.	  bit dout;        // Define an output bit "dout"
+4.	  
+5.	  function transaction copy();
+6.	    copy = new();   // Create a new transaction object
+7.	    copy.din = this.din;  // Copy the input value
+8.	    copy.dout = this.dout;  // Copy the output value
+9.	  endfunction
+10.	  
+11.	  function void display(input string tag);
+12.	    $display("[%0s] : DIN : %0b DOUT : %0b", tag, din, dout); // Display transaction information
+13.	  endfunction
+14.	  
+15.	endclass
+16.	 
+17.	//////////////////////////////////////////////////
+18.	 
+19.	class generator;
+20.	  transaction tr;  // Define a transaction object
+21.	  mailbox #(transaction) mbx;      // Create a mailbox to send data to the driver
+22.	  mailbox #(transaction) mbxref;   // Create a mailbox to send data to the scoreboard for comparison/golden data
+23.	  event sconext; // Event to sense the completion of scoreboard work
+24.	  event done;    // Event to trigger when the requested number of stimuli is applied
+25.	  int count;     // Stimulus count
+26.	 
+27.	  function new(mailbox #(transaction) mbx, mailbox #(transaction) mbxref);
+28.	    this.mbx = mbx;  // Initialize the mailbox for the driver
+29.	    this.mbxref = mbxref; // Initialize the mailbox for the scoreboard
+30.	    tr = new(); // Create a new transaction object
+31.	  endfunction
+32.	  
+33.	  task run();
+34.	    repeat(count) begin
+35.	      assert(tr.randomize) else $error("[GEN] : RANDOMIZATION FAILED");
+36.	      mbx.put(tr.copy); // Put a copy of the transaction into the driver mailbox
+37.	      mbxref.put(tr.copy); // Put a copy of the transaction into the scoreboard mailbox
+38.	      tr.display("GEN"); // Display transaction information
+39.	      @(sconext); // Wait for the scoreboard's completion signal
+40.	    end
+41.	    ->done; // Trigger "done" event when all stimuli are applied
+42.	  endtask
+43.	  
+44.	endclass
+45.	 
+46.	//////////////////////////////////////////////////////////
+47.	 
+48.	class driver;
+49.	  transaction tr; // Define a transaction object
+50.	  mailbox #(transaction) mbx; // Create a mailbox to receive data from the generator
+51.	  virtual dff_if vif; // Virtual interface for DUT
+52.	  
+53.	  function new(mailbox #(transaction) mbx);
+54.	    this.mbx = mbx; // Initialize the mailbox for receiving data
+55.	  endfunction
+56.	  
+57.	  task reset();
+58.	    vif.rst <= 1'b1; // Assert reset signal
+59.	    repeat(5) @(posedge vif.clk); // Wait for 5 clock cycles
+60.	    vif.rst <= 1'b0; // Deassert reset signal
+61.	    @(posedge vif.clk); // Wait for one more clock cycle
+62.	    $display("[DRV] : RESET DONE"); // Display reset completion message
+63.	  endtask
+64.	  
+65.	  task run();
+66.	    forever begin
+67.	      mbx.get(tr); // Get a transaction from the generator
+68.	      vif.din <= tr.din; // Set DUT input from the transaction
+69.	      @(posedge vif.clk); // Wait for the rising edge of the clock
+70.	      tr.display("DRV"); // Display transaction information
+71.	      vif.din <= 1'b0; // Set DUT input to 0
+72.	      @(posedge vif.clk); // Wait for the rising edge of the clock
+73.	    end
+74.	  endtask
+75.	  
+76.	endclass
+77.	 
+78.	//////////////////////////////////////////////////////
+79.	 
+80.	class monitor;
+81.	  transaction tr; // Define a transaction object
+82.	  mailbox #(transaction) mbx; // Create a mailbox to send data to the scoreboard
+83.	  virtual dff_if vif; // Virtual interface for DUT
+84.	  
+85.	  function new(mailbox #(transaction) mbx);
+86.	    this.mbx = mbx; // Initialize the mailbox for sending data to the scoreboard
+87.	  endfunction
+88.	  
+89.	  task run();
+90.	    tr = new(); // Create a new transaction
+91.	    forever begin
+92.	      repeat(2) @(posedge vif.clk); // Wait for two rising edges of the clock
+93.	      tr.dout = vif.dout; // Capture DUT output
+94.	      mbx.put(tr); // Send the captured data to the scoreboard
+95.	      tr.display("MON"); // Display transaction information
+96.	    end
+97.	  endtask
+98.	  
+99.	endclass
+100.	 
+101.	////////////////////////////////////////////////////
+102.	 
+103.	class scoreboard;
+104.	  transaction tr; // Define a transaction object
+105.	  transaction trref; // Define a reference transaction object for comparison
+106.	  mailbox #(transaction) mbx; // Create a mailbox to receive data from the driver
+107.	  mailbox #(transaction) mbxref; // Create a mailbox to receive reference data from the generator
+108.	  event sconext; // Event to signal completion of scoreboard work
+109.	 
+110.	  function new(mailbox #(transaction) mbx, mailbox #(transaction) mbxref);
+111.	    this.mbx = mbx; // Initialize the mailbox for receiving data from the driver
+112.	    this.mbxref = mbxref; // Initialize the mailbox for receiving reference data from the generator
+113.	  endfunction
+114.	  
+115.	  task run();
+116.	    forever begin
+117.	      mbx.get(tr); // Get a transaction from the driver
+118.	      mbxref.get(trref); // Get a reference transaction from the generator
+119.	      tr.display("SCO"); // Display the driver's transaction information
+120.	      trref.display("REF"); // Display the reference transaction information
+121.	      if (tr.dout == trref.din)
+122.	        $display("[SCO] : DATA MATCHED"); // Compare data and display the result
+123.	      else
+124.	        $display("[SCO] : DATA MISMATCHED");
+125.	      $display("-------------------------------------------------");
+126.	      ->sconext; // Signal completion of scoreboard work
+127.	    end
+128.	  endtask
+129.	  
+130.	endclass
+131.	 
+132.	////////////////////////////////////////////////////////
+133.	 
+134.	class environment;
+135.	  generator gen; // Generator instance
+136.	  driver drv; // Driver instance
+137.	  monitor mon; // Monitor instance
+138.	  scoreboard sco; // Scoreboard instance
+139.	  event next; // Event to signal communication between generator and scoreboard
+140.	 
+141.	  mailbox #(transaction) gdmbx; // Mailbox for communication between generator and driver
+142.	  mailbox #(transaction) msmbx; // Mailbox for communication between monitor and scoreboard
+143.	  mailbox #(transaction) mbxref; // Mailbox for communication between generator and scoreboard
+144.	  
+145.	  virtual dff_if vif; // Virtual interface for DUT
+146.	 
+147.	  function new(virtual dff_if vif);
+148.	    gdmbx = new(); // Create a mailbox for generator-driver communication
+149.	    mbxref = new(); // Create a mailbox for generator-scoreboard reference data
+150.	    gen = new(gdmbx, mbxref); // Initialize the generator
+151.	    drv = new(gdmbx); // Initialize the driver
+152.	    msmbx = new(); // Create a mailbox for monitor-scoreboard communication
+153.	    mon = new(msmbx); // Initialize the monitor
+154.	    sco = new(msmbx, mbxref); // Initialize the scoreboard
+155.	    this.vif = vif; // Set the virtual interface for DUT
+156.	    drv.vif = this.vif; // Connect the virtual interface to the driver
+157.	    mon.vif = this.vif; // Connect the virtual interface to the monitor
+158.	    gen.sconext = next; // Set the communication event between generator and scoreboard
+159.	    sco.sconext = next; // Set the communication event between scoreboard and generator
+160.	  endfunction
+161.	  
+162.	  task pre_test();
+163.	    drv.reset(); // Perform the driver reset
+164.	  endtask
+165.	  
+166.	  task test();
+167.	    fork
+168.	      gen.run(); // Start generator
+169.	      drv.run(); // Start driver
+170.	      mon.run(); // Start monitor
+171.	      sco.run(); // Start scoreboard
+172.	    join_any
+173.	  endtask
+174.	  
+175.	  task post_test();
+176.	    wait(gen.done.triggered); // Wait for generator to complete
+177.	    $finish(); // Finish simulation
+178.	  endtask
+179.	  
+180.	  task run();
+181.	    pre_test(); // Run pre-test setup
+182.	    test(); // Run the test
+183.	    post_test(); // Run post-test cleanup
+184.	  endtask
+185.	endclass
+186.	 
+187.	/////////////////////////////////////////////////////
+188.	 
+189.	module tb;
+190.	  dff_if vif(); // Create DUT interface
+191.	 
+192.	  dff dut(vif); // Instantiate DUT
+193.	  
+194.	  initial begin
+195.	    vif.clk <= 0; // Initialize clock signal
+196.	  end
+197.	  
+198.	  always #10 vif.clk <= ~vif.clk; // Toggle the clock every 10 time units
+199.	  
+200.	  environment env; // Create environment instance
+201.	 
+202.	  initial begin
+203.	    env = new(vif); // Initialize the environment with the DUT interface
+204.	    env.gen.count = 30; // Set the generator's stimulus count
+205.	    env.run(); // Run the environment
+206.	  end
+207.	  
+208.	  initial begin
+209.	    $dumpfile("dump.vcd"); // Specify the VCD dump file
+210.	    $dumpvars; // Dump all variables
+211.	  end
+212.	endmodule
+
